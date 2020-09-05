@@ -1,0 +1,3 @@
+/home/pi/commande_systeme_robotique/workspace/TPExo2/build/CMakeFiles/edit_cache.dir
+/home/pi/commande_systeme_robotique/workspace/TPExo2/build/CMakeFiles/rebuild_cache.dir
+/home/pi/commande_systeme_robotique/workspace/TPExo2/build/CMakeFiles/my_exe.dir
