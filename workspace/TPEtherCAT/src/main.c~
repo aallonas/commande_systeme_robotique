@@ -1,0 +1,638 @@
+//Includes
+#include "main.h"
+#include <math.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <alchemy/task.h>
+#include <alchemy/timer.h>
+
+/*Structure de données du controleur*/
+CONTROLLER_STRUCT rtController;
+
+/* Varaibles spécifiques à la communication avec le bus EtherCAT */
+static ec_master_t          *master        = NULL;
+static ec_master_state_t    master_state   = {};
+static ec_domain_t          *domain        = NULL;
+static ec_domain_state_t    domain_state   = {};
+static uint8_t              *domain_pd     = NULL;
+
+
+/* Varaibles spécifiques à la tâche temps-réel périodique */
+/*Tâche periodique de fréqeucen 1khz*/
+long long main_task_period_ns = 1000*1000LL;
+RT_TASK rtController_Main_Task;
+#define RTCONTROLLER_MAIN_TASK_STKSZ 4096               /* taille de la pile execution */
+#define RTCONTROLLER_MAIN_TASK_PRIO 99                  /*priorité */
+#define RTCONTROLLER_MAIN_TASK_MODE 0                   /* utilisation FPU,  CPU #0 */
+
+/* Beckhoff modules */
+const uint8_t EL5101_Enable_C_Reset[]          = {0};
+
+/***************************************************************/
+/********** A FAIRE 1 (DEBUT)*************************************/
+/**** VERIFIER LES MODULES ETHERCAT : Vendor ID, Product Code **/
+#define BECKHOFF_EK1100 0x00000002, 0x044C2C52
+#define BECKHOFF_EL5101 0x00000002, 0x13ed3052
+#define BECKHOFF_EL4132 0x00000002, 0x10243052
+#define BECKHOFF_EL3102 0x00000002, 0x0c1e3052
+/**** VERIFIER LA TOPOLOGIE DE VOTRE BUS ID MASTER, SLAVE POSITION **/
+#define BusCouplerPos           0, 0    //EK1100
+#define AnaOutSlavePos          0, 2    //EL4132
+#define CounterSlavePos         0, 1    //EL5101
+#define AnaInSlavePos           0, 3    //EL3102
+
+/***** INTEGRER LES STRUCTURES DE DONNEES PDO POUR CHAQUE ESCLAVE*/
+
+/********** A FAIRE 1 (FIN)*************************************/
+/***************************************************************/
+/*Initialisation des Structures de données des modules*/
+ANALOG_INPUT_STRUCT     AnalogIn[NB_ANALOG_INPUT]={NULL,0,0};
+ANALOG_OUTPUT_STRUCT    AnalogOut[NB_ANALOG_OUTPUT]={NULL,0,0};
+COUNTER_STRUCT          Counter[NB_INCR_ENCODER]={NULL,0,0,0,0,0,0,0,0,0,0,0};
+
+/**********************************************************/
+/******* FONCTIONS BUS ETHERCAT ***************************/
+/**********************************************************/
+/**
+  * @fn     void rt_check_domain_state(void
+  * @brief
+  * @arg    aucun
+  * @return aucun
+ */
+void rt_check_domain_state(void)
+{
+    ec_domain_state_t ds = {};
+
+    ecrt_domain_state(domain, &ds);
+
+    if (ds.working_counter != domain_state.working_counter) {
+        printf("Domain1: WC %u.\n", ds.working_counter);
+    }
+
+    if (ds.wc_state != domain_state.wc_state) {
+        printf("Domain1: State %u.\n", ds.wc_state);
+    }
+
+    domain_state = ds;
+}
+
+
+/**
+  * @fn     void rt_check_master_state()
+  * @brief
+  * @arg    aucun
+  * @return aucun
+ */
+void rt_check_master_state(void)
+{
+    ec_master_state_t ms;
+    ecrt_master_state(master, &ms);
+
+    if (ms.slaves_responding != master_state.slaves_responding)
+    {
+        fprintf(stdout,"AL states: 0x%02X.\n", ms.al_states);
+        fflush(stdout);
+    }
+
+    if (ms.al_states != master_state.al_states) {
+        fprintf(stdout,"AL states: 0x%02X.\n", ms.al_states);
+        fflush(stdout);
+    }
+
+    if (ms.link_up != master_state.link_up)
+    {
+        fprintf(stdout,"Link is %s.\n", ms.link_up ? "up" : "down");
+        fflush(stdout);// rt_printf("AL states: 0x%02X.\n", ms.al_states);
+
+    }
+
+    master_state = ms;
+
+}
+
+/**********************************************************/
+/***                                                    ***/
+/***     FONCTIONS ACQUISITION/CONTROLE                 ***/
+/***                                                    ***/
+/**********************************************************/
+
+///
+/// \fn rtController_read_analog_input
+/// \brief lecture de l'ensemble des entrées analogiques du bus et restitution de la tension
+/// \return code Erreur
+///
+int rtController_read_analog_input(double *value)
+{
+    /*Coefficient de convertion*/
+    static double adc_value_to_voltage = 20/65536;
+
+    int16_t adc_value;
+
+    adc_value = EC_READ_S16(domain_pd+AnalogIn[0].offset_value_in);
+
+
+    *value = (double)adc_value*adc_value_to_voltage;
+    return NO_ERROR;
+}
+
+///
+/// \fn rtController_write_analog_output
+/// \brief envoi les sorties analogiques
+/// \return
+int rtController_write_analog_output(double value)
+{
+    int16_t dac_value;
+    /*Coefficient de convertion*/
+    static double votage_to_dac_value = 65536/20;
+    AnalogOut[0].value = value;
+    /* Vérification Nan*/
+    if ( isnan(value))
+       AnalogOut[0].value = 0;
+    /* Saturation*/
+    if (value > 10)
+        AnalogOut[0].value= 10;
+    if (value < -10)
+        AnalogOut[0].value = 10;
+
+    //Conversion DAC de la tension de sortie puis envoie
+    dac_value = (int16_t)(AnalogOut[0].value*votage_to_dac_value);
+    EC_WRITE_S16(domain_pd + AnalogOut[0].offset_output, dac_value);
+
+    return NO_ERROR;
+}
+
+/**
+ * \fn rtController_read_incr_encoder
+ *  \brief lecture des codeurs incrémentaux
+ *  \return code erreur
+**/
+int rtController_read_incr_encoder(int id, int32_t *encoder_value)
+{
+    uint8_t control;
+    if (( Counter[id].prevoverfl == 0 ) && (Counter[id].overflow ==1))
+         Counter[id].turn++;
+
+     //Underflow de l'encodeur? (Bit 3 de status: underflow)
+     else if ((Counter[id].prevunderfl == 0) && (Counter[id].underflow== 1))
+         Counter[id].turn--;
+
+     Counter[id].prevoverfl = Counter[id].overflow;
+     Counter[id].prevunderfl = Counter[id].underflow;
+
+    Counter[id].value = EC_READ_U32(domain_pd+Counter[id].offset_value_in);
+    Counter[id].value += Counter[id].turn*2^32;
+
+    *encoder_value =   (int32_t)Counter[id].value;
+
+    return NO_ERROR;
+}
+
+
+
+
+
+
+
+///
+/// \brief rtController_stop
+/// \param sig
+///
+void rtController_stop(int sig)
+{
+
+  /*    PRINTF_RTCONTROLLER("Arret de la boucle infinie\n");*/
+    rtController.bIsRunning = 0;
+
+
+}
+
+
+/**
+ * @fn rtController_Init_ControllerStruct
+ * @brief Initialisation de la structure de données du controleur
+ */
+void rtController_Init_ControllerStruct(void)
+{
+    int i;
+    rtController.mode        = WAIT_MODE;
+    rtController.submode     = WAIT_SUBMODE;
+    rtController.bIsCal      = 0;
+    rtController.bIsRunning  = 0;
+    rtController.bIsTrackingEnd = 0;
+    rtController.CounterValue[0] = 0;
+    rtController.control[0] = 0;
+    for (i= 0; i < 2;i++)
+    {
+        rtController.measure[i] = 0;
+        rtController.position_ref[i] = 0;
+    }
+    rtController.measure[0] = InitAngularPosition;
+    rtController.current_time = 0;
+    rtController.start_time = 0;
+}
+
+
+/**
+  * Fonctions associées à la structure du système robotique
+  */
+
+/**
+* \fn rtController_UpdateRobot
+* \brief Mise à jour des données de la structure de données associée à la structure robotique (mapping matériel ethercat / robot)
+* \return Code erreur
+**/
+int rtController_UpdateRobot(void)
+{
+
+    /* mesure de la position angulaire q1 en rad */
+    rtController.measure[0] = joint_direction[0]*(double)(rtController.CounterValue[0])*sensor_voltage_to_SI[0]; //en rad
+    rtController.measure[0] = rtController.measure[0] - InitAngularPosition;
+    /*mesure de la position x en mm*/
+    rtController.measure[1] = (double)(rtController.analog_input_value)*sensor_voltage_to_SI[1];
+
+    return NO_ERROR;
+}
+
+
+
+
+
+/**
+ * @brief rtController_DeviceUpdate
+ */
+void rtController_DeviceUpdate(void)
+{
+    /*Reception des données provenant du bus*/
+    ecrt_master_receive(master);
+    ecrt_domain_process(domain);
+    rt_check_master_state();
+
+    /* Mise à jour des données sur le bus ethercat*/
+    rtController_read_incr_encoder(0, &rtController.CounterValue[0]);
+    rtController_write_analog_output(rtController.control[0]);
+    rtController_read_analog_input(&rtController.analog_input_value);
+    /*Envoi des données vers le bus*/
+    ecrt_domain_queue(domain);
+    ecrt_master_send(master);
+
+    /* Mapping et mise à jour des structures de données associées à chaque éléments du système*/
+    rtController_UpdateRobot();
+
+
+}
+
+
+
+/******************************************************************************************************/
+
+int rtController_Wait_Proc(void)
+{
+    rtController.mode = CAL_MODE;
+
+    return NO_ERROR;
+}
+
+int rtController_doCal_Proc(void)
+{
+    int i;
+    rtController.control[0] = 0.0;
+
+    return NO_ERROR;
+}
+/***************************************************************/
+/********** A FAIRE 3 (DEBUT)*************************************/
+/****   Lorsque le controleur bascule en mode POSITION_TRACKING_MODE
+ * la fonction suivante est appelée à chaque pas d'échantillonnage
+ * Dans cette fonction nous souhaitons mettre en oeuvre un asservissement de
+ * position dans l'espace articulaire. Faire une loi de commande qui calcule
+ * rtControler.control à chaque pas pour que la position angulaire q1 suive
+ * trajectoire sinusoidale de fréquence 0,5 Hz d'amplitude 45 degrés centrée
+ * autour de la position zéro; pendant une durée de 5 secondes.
+ * La loi de commande n'a pas besoin d'etre complexe, un simple correcteur
+ * propotionnel devrait suffir (par précaution rendre une valeur de gain faible
+ * pour ensuite l'augmenter doucement - c'est un réglage empirique sans modèle
+ * a priori) assurez-vous que la commande reste bornée et stable
+ * Assurez vous également que vous avez bien renseigné la position initiale
+ * de l'angle q1 dans le fichier main.h
+ * Une fois cet asservissement validé (en accord avec l'enseignant) tester le.
+ * Ensuite implenter le modèle géométrique direct dans une nouvelle fonction et comparer la
+ * position mesurée et la position calcul (ce modèle aura été validé en simulation avant
+ *  ... que pouvez-vous en conclure ?
+  **/
+int rtController_doPositionTracking_Proc(void)
+{
+
+    return NO_ERROR;
+}
+
+
+/********** A FAIRE 3 (FIN)*************************************/
+/***************************************************************/
+
+/**
+  * \fn rtController_main_sequence
+  *  \brief gestion des modes de fonctionnement du robot
+  *
+  **/
+void rtController_main_sequencer(void)
+{
+    switch( rtController.mode)
+    {
+
+    /* Mode Attente */
+    case WAIT_MODE:
+        rtController_Wait_Proc();
+        break;
+  
+    /* Calibration */
+    case CAL_MODE:
+        printf("Calibration\n");
+        if ( !rtController.bIsCal)
+        {
+            if (rtController_doCal_Proc() < 0)
+                break;
+        }
+        else
+        {
+            rtController.current_time = 0;
+            rtController.bIsTrackingEnd = 0;
+            rtController.mode = POSITION_TRACKING_MODE;
+        }
+
+        break;
+
+    case JPOS_STATIC_MODE:
+        rtController.current_time = 0;
+        break;
+
+    case POSITION_TRACKING_MODE:
+        if ( !rtController.bIsCal)
+            rtController.mode = CAL_MODE;
+        else
+        {
+
+            if (!rtController.bIsTrackingEnd)
+                rtController_doPositionTracking_Proc();
+            else
+                rtController.mode = JPOS_STATIC_MODE;
+
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+
+
+
+
+///
+/// \fn rtController_config_ethercat
+/// \brief configuration du bus en fonction des modules esclaves
+/// \return code d'erreur si erreur lors de la configuration d'un module
+///
+int  rtController_config_ethercat(void)
+{
+    uint32_t abort_code;
+
+  /* Configuration du module Coupleur EK1100*/
+  if (!ecrt_master_slave_config(master, BusCouplerPos, BECKHOFF_EK1100))
+    return -1;
+  
+  /* convertisserur du module Comptage  EL5101*/
+  Counter[0].sc = ecrt_master_slave_config(master,
+                                                        CounterSlavePos,
+                                                        BECKHOFF_EL5101);
+  if (!Counter[0].sc)
+    return -1;
+  if (ecrt_slave_config_pdos(Counter[0].sc,
+                               EC_END,
+                               slave_1_syncs))
+    return -1;
+  ecrt_master_sdo_download(master,1, 0x8010, 0x01, EL5101_Enable_C_Reset, sizeof(EL5101_Enable_C_Reset), &abort_code);
+  //Value in
+  Counter[0].offset_value_in = ecrt_slave_config_reg_pdo_entry(Counter[0].sc,
+                                                                            0x6010,
+                                                                            0x11,
+                                                                            domain,
+                                                                            NULL);
+  if ( Counter[0].offset_value_in < 0)
+  {
+      printf("Failed to register PDO Entry\n");
+      return -1;
+  }
+  //Latch
+  Counter[0].offset_latch = ecrt_slave_config_reg_pdo_entry(Counter[0].sc,
+                                                               0x6010,
+                                                               0x12,
+                                                               domain,
+                                                               NULL);
+  if (Counter[0].offset_latch < 0)
+  {
+      printf("Failed to register PDO Entry\n");
+      return -1;
+  }
+  //Ctrl
+  Counter[0].offset_ctrl = ecrt_slave_config_reg_pdo_entry(Counter[0].sc,
+                                                              0x7010,
+                                                              0x01,
+                                                              domain,
+                                                              NULL);
+  if (Counter[0].offset_ctrl < 0)
+  {
+      printf("Failed to register PDO Entry\n");
+      return -1;
+  }
+
+  //Value out
+  Counter[0].offset_value_out = ecrt_slave_config_reg_pdo_entry(Counter[0].sc,
+                                                                   0x7010,
+                                                                   0x11,
+                                                                   domain,
+                                                                   NULL);
+  if (Counter[0].offset_value_out < 0)
+  {
+      printf( "Failed to register PDO Entry\n");
+      return 1;
+  }
+
+  /* convertisseur du module CNA EL4132*/
+  AnalogOut[0].sc = ecrt_master_slave_config(master,
+                                                          AnaOutSlavePos,
+                                                          BECKHOFF_EL4132);
+  if (!AnalogOut[0].sc)
+    return -1;
+  if (ecrt_slave_config_pdos(AnalogOut[0].sc, EC_END, slave_2_syncs))
+    return -1;
+
+  AnalogOut[0].offset_output= ecrt_slave_config_reg_pdo_entry(AnalogOut[0].sc,
+                                                               0x3001,
+                                                               0x01,
+                                                               domain,
+                                                               NULL);
+
+  /* convertisserur du module CAN EL3102*/
+  AnalogIn[0].sc = ecrt_master_slave_config(master,
+                                                         AnaInSlavePos,
+                                                         BECKHOFF_EL3102);
+  if (!AnalogIn[0].sc)
+    return -1;
+  if (ecrt_slave_config_pdos(AnalogIn[0].sc, EC_END, slave_3_syncs))
+    return -1;
+  
+  AnalogIn[0].offset_value_in= ecrt_slave_config_reg_pdo_entry(AnalogIn[0].sc,
+                                                               0x3101,
+                                                               0x02,
+                                                               domain,
+                                                               NULL);
+
+    return 0;
+}
+
+
+/**
+ * \brief procédure de connection au bus ethercat
+ *  \param arg
+**/
+void rtController_Main_Proc(void *arg)
+{
+    int ret, i;
+    unsigned long mask_ret;
+    RTIME start_ns;
+    RTIME start_time;
+    RTIME current_time;
+    /* Initialisation de la structure associée au controleur */
+    rtController_Init_ControllerStruct();
+    /*****************************************************************************************/
+    /* Configuration des modules EtherCAT */
+
+
+    /*****************************************************************************************/
+    /* Initialisation et paramétragre de la communication via le bus ethercat                */ 
+    /*****************************************************************************************/
+    master = ecrt_request_master(0);
+    if (!master)
+    {
+        printf("Echec requete master\n");
+        return ;
+    }
+    /*****************************************************************************************/
+    domain = ecrt_master_create_domain(master);
+    if ( !domain)
+    {
+        printf("Creation of domain failed\n");
+        goto error;
+    }
+
+
+    if ( rtController_config_ethercat() < 0)
+      {
+	printf("Echec configuration modules escslaves.\n");
+	goto error;
+      }
+
+    printf("Activation du master\n");
+    if (ecrt_master_activate(master))
+    {
+      printf("Echec activation master.\n");
+      goto error;
+    }
+    printf("Initialisation du domaine de données ...\n");
+    domain_pd = ecrt_domain_data(domain) ;
+
+
+    rtController.bIsRunning = 1;
+    /* PÃ©riodiser la tÃ¢che */
+    sleep(1);
+    printf("Démarrage tâche pếriodique avec une période de 1 ms ...\n");
+    start_ns = rt_timer_read() + 1000000; /* 1ms  */
+
+    ret = rt_task_set_periodic(NULL,
+                               start_ns,
+                               main_task_period_ns);
+    start_time = rt_timer_read();
+
+    while(rtController.bIsRunning)
+    {
+        ret = rt_task_wait_period(NULL);
+        if (ret)
+        {
+            printf("Erreur lors de rt_task_wait_period\n");
+            rtController.bIsRunning = 0;
+            break;
+        }
+        rtController_DeviceUpdate();
+        current_time = rt_timer_read();
+
+        rtController.current_time = ((double)current_time - (double)start_time) / 1000000.0;//+(long)(current_time - start_time) % 1000000;
+
+        if (master_state.al_states == EC_MASTER_OP)
+        {
+
+            rtController_main_sequencer();
+
+        }
+       
+    }
+
+    printf("Fin de la tâche principale.\n");
+    printf("Libération master\n");
+    ecrt_release_master(master);
+ error :
+    ecrt_release_master(master);
+}
+
+
+
+
+
+/**
+  * @fn int main(void)
+ * @brief Fonction principale
+ * @return
+ */
+int main(void)
+{
+
+    int ret,i;
+    sigset_t set;
+    int sig;
+
+
+    sigemptyset(&set);
+    sigaddset(&set, SIGINT);
+    sigaddset(&set, SIGKILL);
+    signal(SIGTERM, rtController_stop);
+    signal(SIGINT,  rtController_stop);
+    signal(SIGHUP,  rtController_stop);//Interruption interactive (Ctrl C ou clavier)
+    signal(SIGKILL, rtController_stop);
+    /*** Initialisation de la structure*/
+    /* Interdit le swapping de mémoire pour ce programme*/
+    if(mlockall(MCL_CURRENT|MCL_FUTURE) == -1)
+    {
+        perror("mlockall failed");
+        exit(-2);
+    }
+    iopl(3);
+
+    
+    /***************************************************************/
+    /********** A FAIRE 2 (DEBUT)*************************************/
+    /****  Créer la tache temps reel ayant pour identifiant rtController_Main_Task;
+            avec pour nom "RTCONTROLLER_MAIN_TASK" avec les paramètres
+            définis au début du programme pour la stack; priorité et mode
+            Lancer l'exécution de la tâche en lui associant la fonction
+            rtController_Main_Proc*/
+
+    /********** A FAIRE 2 (FIN)*************************************/
+    /***************************************************************/
+
+
+    pause();
+    rt_task_delete(&rtController_Main_Task);
+    return 0;
+}
+
+

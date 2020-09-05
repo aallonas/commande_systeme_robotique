@@ -1,0 +1,8 @@
+if( UNIX )
+    set( EtherCATFound FALSE )
+    set( ETHERCAT_DIR               /opt/etherlab)
+    set( ETHERCAT_INCLUDE_DIR       /opt/etherlab/include)
+    find_library(ECAT_LIBRARY ethercat PATH /opt/etherlab/lib)
+    message(${ECAT_LIBRARY})
+    set( EtherCATFound TRUE )
+endif( UNIX )
