@@ -29,31 +29,100 @@ RT_TASK rtController_Main_Task;
 /* Beckhoff modules */
 const uint8_t EL5101_Enable_C_Reset[]          = {0};
 
+
 /***************************************************************/
 /********** A FAIRE 1 (DEBUT)*************************************/
+
 /**** VERIFIER LES MODULES ETHERCAT : Vendor ID, Product Code **/
 #define BECKHOFF_EK1100 0x00000002, 0x044C2C52
 #define BECKHOFF_EL5101 0x00000002, 0x13ed3052
-#define BECKHOFF_EL4134 0x00000002, 0x10263052
+#define BECKHOFF_EL4132 0x00000002, 0x10243052
 #define BECKHOFF_EL3102 0x00000002, 0x0c1e3052
+
 /**** VERIFIER LA TOPOLOGIE DE VOTRE BUS ID MASTER, SLAVE POSITION **/
 #define BusCouplerPos           0, 0    //EK1100
-#define AnaOutSlavePos          0, 2    //EL4134
+#define AnaOutSlavePos          0, 2    //EL4132
 #define CounterSlavePos         0, 1    //EL5101
 #define AnaInSlavePos           0, 3    //EL3102
 
 /***** INTEGRER LES STRUCTURES DE DONNEES PDO POUR CHAQUE ESCLAVE*/
+
+/* Master 0, Slave 1, "EL5101"
+ * Vendor ID:       0x00000002
+ * Product code:    0x13ed3052
+ * Revision number: 0x03ff0000
+ */
 ec_pdo_entry_info_t slave_1_pdo_entries[] = {
-    {0x7000, 0x01, 8}, /* Ctrl */
-    {0x7000, 0x02, 16}, /* Value */
-    {0x6000, 0x01, 8}, /* Status */
-    {0x6000, 0x02, 16}, /* Value */
-    {0x6000, 0x03, 16}, /* Latch */
+    {0x7010, 0x01, 1}, /* Enable latch C */
+    {0x7010, 0x02, 1}, /* Enable latch extern on pos */
+    {0x7010, 0x03, 1}, /* Set counter */
+    {0x7010, 0x04, 1}, /* Enable latch extern on neg */
+    {0x0000, 0x00, 4}, /* Gap */
+    {0x0000, 0x00, 8}, /* Gap */
+    {0x7010, 0x11, 32}, /* Set counter value */
+    {0x6010, 0x01, 1}, /* Latch C valid */
+    {0x6010, 0x02, 1}, /* Latch extern valid */
+    {0x6010, 0x03, 1}, /* Set counter done */
+    {0x6010, 0x04, 1}, /* Counter underflow */
+    {0x6010, 0x05, 1}, /* Counter overflow */
+    {0x6010, 0x06, 1}, /* Status of input status */
+    {0x6010, 0x07, 1}, /* Open circuit */
+    {0x6010, 0x08, 1}, /* Extrapolation stall */
+    {0x6010, 0x09, 1}, /* Status of input A */
+    {0x6010, 0x0a, 1}, /* Status of input B */
+    {0x6010, 0x0b, 1}, /* Status of input C */
+    {0x6010, 0x0c, 1}, /* Status of input gate */
+    {0x6010, 0x0d, 1}, /* Status of extern latch */
+    {0x6010, 0x0e, 1}, /* Sync error */
+    {0x6010, 0x0f, 1}, /* TxPDO State */
+    {0x6010, 0x10, 1}, /* TxPDO Toggle */
+    {0x6010, 0x11, 32}, /* Counter value */
+    {0x6010, 0x12, 32}, /* Latch value */
 };
+
+ec_pdo_info_t slave_1_pdos[] = {
+    {0x1603, 7, slave_1_pdo_entries + 0}, /* ENC RxPDO-Map Control */
+    {0x1a04, 18, slave_1_pdo_entries + 7}, /* ENC TxPDO-Map Status */
+};
+
+ec_sync_info_t slave_1_syncs[] = {
+    {0, EC_DIR_OUTPUT, 0, NULL, EC_WD_DISABLE},
+    {1, EC_DIR_INPUT, 0, NULL, EC_WD_DISABLE},
+    {2, EC_DIR_OUTPUT, 1, slave_1_pdos + 0, EC_WD_DISABLE},
+    {3, EC_DIR_INPUT, 1, slave_1_pdos + 1, EC_WD_DISABLE},
+    {0xff}
+};
+
+/* Master 0, Slave 2, "EL4132"
+ * Vendor ID:       0x00000002
+ * Product code:    0x10243052
+ * Revision number: 0x03fb0000
+ */
+
 ec_pdo_entry_info_t slave_2_pdo_entries[] = {
     {0x3001, 0x01, 16}, /* Output */
     {0x3002, 0x01, 16}, /* Output */
 };
+
+ec_pdo_info_t slave_2_pdos[] = {
+    {0x1600, 1, slave_2_pdo_entries + 0}, /* RxPDO 01 mapping */
+    {0x1601, 1, slave_2_pdo_entries + 1}, /* RxPDO 02 mapping */
+};
+
+ec_sync_info_t slave_2_syncs[] = {
+    {0, EC_DIR_OUTPUT, 0, NULL, EC_WD_DISABLE},
+    {1, EC_DIR_INPUT, 0, NULL, EC_WD_DISABLE},
+    {2, EC_DIR_OUTPUT, 2, slave_2_pdos + 0, EC_WD_DISABLE},
+    {3, EC_DIR_INPUT, 0, NULL, EC_WD_DISABLE},
+    {0xff}
+};
+
+/* Master 0, Slave 3, "EL3102"
+ * Vendor ID:       0x00000002
+ * Product code:    0x0c1e3052
+ * Revision number: 0x00140000
+ */
+
 ec_pdo_entry_info_t slave_3_pdo_entries[] = {
     {0x3101, 0x01, 8}, /* Status */
     {0x3101, 0x02, 16}, /* Value */
@@ -61,8 +130,22 @@ ec_pdo_entry_info_t slave_3_pdo_entries[] = {
     {0x3102, 0x02, 16}, /* Value */
 };
 
+ec_pdo_info_t slave_3_pdos[] = {
+    {0x1a00, 2, slave_3_pdo_entries + 0}, /* TxPDO-Map Channel 1 */
+    {0x1a01, 2, slave_3_pdo_entries + 2}, /* TxPDO-Map Channel 2 */
+};
+
+ec_sync_info_t slave_3_syncs[] = {
+    {0, EC_DIR_OUTPUT, 0, NULL, EC_WD_DISABLE},
+    {1, EC_DIR_INPUT, 0, NULL, EC_WD_DISABLE},
+    {2, EC_DIR_OUTPUT, 0, NULL, EC_WD_DISABLE},
+    {3, EC_DIR_INPUT, 2, slave_3_pdos + 0, EC_WD_DISABLE},
+    {0xff}
+};
+
 /********** A FAIRE 1 (FIN)*************************************/
 /***************************************************************/
+
 /*Initialisation des Structures de données des modules*/
 ANALOG_INPUT_STRUCT     AnalogIn[NB_ANALOG_INPUT]={NULL,0,0};
 ANALOG_OUTPUT_STRUCT    AnalogOut[NB_ANALOG_OUTPUT]={NULL,0,0};
@@ -258,18 +341,82 @@ void rtController_Init_ControllerStruct(void)
 * \brief Mise à jour des données de la structure de données associée à la structure robotique (mapping matériel ethercat / robot)
 * \return Code erreur
 **/
-int rtController_UpdateRobot(void)
+double Calculer_MGD(double theta1)
 {
 
+    double l1 = 30.0;
+    double l2 = 90.0;
+    double l3 = 90.0;
+    double l4 = 56.0;
+    double l5 = 69.0;
+    double l7 = 90.0;
+    double l8 = 120.0;
+    double l9 = 45.0;
+    double l10 = 35.0;
+    double alpha1 = 60.0 * (M_PI / 180.0); // 1.04719... rad
+
+
+    double xB = l1 * cos(theta1);
+    double yB = l1 * sin(theta1);
+
+
+    double xD = l5;
+    double yD = -l4;
+
+
+    double BD2 = pow(xD - xB, 2) + pow(yD - yB, 2);
+    double BD = sqrt(BD2);
+    double angle_BD = atan2(yD - yB, xD - xB);
+
+
+    // Attention à borner le cosinus entre -1 et 1 pour éviter les NaN
+    double cos_gamma = (pow(l2, 2) + BD2 - pow(l3, 2)) / (2.0 * l2 * BD);
+    
+    if (cos_gamma > 1.0) cos_gamma = 1.0;
+    if (cos_gamma < -1.0) cos_gamma = -1.0;
+    
+    double local_gamma = acos(cos_gamma); 
+
+
+    double theta2 = angle_BD + local_gamma;
+    double theta7 = theta2 + alpha1;
+
+
+    double xE = xB + l7 * cos(theta7);
+    double yE = yB + l7 * sin(theta7);
+
+
+    double sin_theta4 = (l9 - yE) / l8;
+    
+    if (sin_theta4 > 1.0) sin_theta4 = 1.0;
+    if (sin_theta4 < -1.0) sin_theta4 = -1.0;
+
+    double cos_theta4 = sqrt(1.0 - pow(sin_theta4, 2)); 
+
+    double xF = xE + l8 * cos_theta4 - l10;
+
+    return xF;
+}
+
+int rtController_UpdateRobot(void)
+{
     /* mesure de la position angulaire q1 en rad */
-    rtController.measure[0] = joint_direction[0]*(double)(rtController.CounterValue[0])*sensor_voltage_to_SI[0]; //en rad
-    rtController.measure[0] = rtController.measure[0] + InitAngularPosition;
-    /*mesure de la position x en mm*/
+    rtController.measure[0] = joint_direction[0]*(double)(rtController.CounterValue[0])*sensor_voltage_to_SI[0]; 
+    rtController.measure[0] = rtController.measure[0];
+    
+    /* mesure de la position x en mm (Capteur Réel) */
     rtController.measure[1] = (double)(rtController.analog_input_value)*sensor_voltage_to_SI[1];
+
+    // --- MODIFICATION ICI ---
+    // On calcule la position théorique via le MGD en utilisant l'angle mesuré (measure[0])
+    double x_calcule = Calculer_MGD(rtController.measure[0]);
+    
+    // On stocke le résultat dans la référence [1] (ou ailleurs selon tes besoins d'affichage)
+    // Cela te permettra de tracer : Mesure Réelle vs Mesure Calculée
+    rtController.position_ref[1] = x_calcule; 
 
     return NO_ERROR;
 }
-
 
 
 
@@ -294,8 +441,6 @@ void rtController_DeviceUpdate(void)
 
     /* Mapping et mise à jour des structures de données associées à chaque éléments du système*/
     rtController_UpdateRobot();
-
-
 }
 
 
@@ -313,7 +458,7 @@ int rtController_doCal_Proc(void)
 {
     int i;
     rtController.control[0] = 0.0;
-rtController_reset_counter();
+    rtController_reset_counter();
     rtController.bIsCal = 1;
     return NO_ERROR;
 }
@@ -328,30 +473,97 @@ int rtController_doJPosStatic_Proc(void)
 /***************************************************************/
 /********** A FAIRE 3 (DEBUT)*************************************/
 /****   Lorsque le controleur bascule en mode POSITION_TRACKING_MODE
- * la fonction suivante est appelée à chaque pas d'échantillonnage
+ * la fonction suivante est appelée à chaque pas d'échantillonnage => déja implémenté 
+
  * Dans cette fonction nous souhaitons mettre en oeuvre un asservissement de
  * position dans l'espace articulaire. Faire une loi de commande qui calcule
  * rtControler.control à chaque pas pour que la position angulaire q1 suive
  * trajectoire sinusoidale de fréquence 0,5 Hz d'amplitude 45 degrés centrée
- * autour de la position zéro; pendant une durée de 5 secondes.
+ * autour de la position zéro; => ça c'est bon
+
+pendant une durée de 5 secondes.
+
  * La loi de commande n'a pas besoin d'etre complexe, un simple correcteur
  * propotionnel devrait suffir (par précaution rendre une valeur de gain faible
  * pour ensuite l'augmenter doucement - c'est un réglage empirique sans modèle
- * a priori) assurez-vous que la commande reste bornée et stable
+ * a priori) assurez-vous que la commande reste bornée et stable => go faire ca
+
  * Assurez vous également que vous avez bien renseigné la position initiale
- * de l'angle q1 dans le fichier main.h
- * Une fois cet asservissement validé (en accord avec l'enseignant) tester le.
+ * de l'angle q1 dans le fichier main.h  => voir avec à alex 
+
+ * Une fois cet asservissement validé (en accord avec l'enseignant) tester le. => objectif de l'aprem
+
  * Ensuite implenter le modèle géométrique direct dans une nouvelle fonction et comparer la
  * position mesurée et la position calcul (ce modèle aura été validé en simulation avant
  *  ... que pouvez-vous en conclure ?
   **/
-int rtController_doPositionTracking_Proc(void)
-{
+
+int rtController_doPositionTracking_Proc(void){
+
+    /* 1. TEMPS */
+    double temps = (rtController.current_time - rtController.start_time)*(1e-9); 
+    
+    /* 2. PARAMETRES */
+    double Freq = 0.5; 
+    double Amp = M_PI/4; 
+    double Consigne = 0.0;
+    
+    /* 3. CALCUL DE LA CONSIGNE */
+    if (temps < 5.0) 
+    {
+        Consigne = 0.0 ; // Maintien à 0
+    }
+    else 
+    {
+        double temps_sinus = temps - 5.0;
+        Consigne = Amp * sin(2 * Freq * M_PI * temps_sinus);
+    }
+
+    /* --- CORRECTION ICI : On envoie la consigne à l'affichage --- */
+    rtController.position_ref[0] = Consigne; 
+    /* ------------------------------------------------------------ */
+
+    /* 4. MESURES */
+    double q1_mes = rtController.measure[0];
+    double X_mes = rtController.measure[1]; 
+    
+    /* 5. SOFT START (Kp progressif) */
+    double Kp_Final = 15.0;
+    double Kp_Start = 5.0; 
+    double Kp_Actuel = 0.0;
+
+    if (temps < 2.0) {
+        Kp_Actuel = Kp_Start + (Kp_Final - Kp_Start) * (temps / 2.0); 
+    } else {
+        Kp_Actuel = Kp_Final;
+    }
+
+    /* 6. CALCUL COMMANDE */
+    double erreur = Consigne - q1_mes;
+    double Commande_angulaire_moteur = Kp_Actuel * erreur;  
+    
+    if (Commande_angulaire_moteur > 10.0) Commande_angulaire_moteur = 10.0;
+    if (Commande_angulaire_moteur < -10.0) Commande_angulaire_moteur = -10.0;
+
+    rtController.control[0] = Commande_angulaire_moteur;
+
+    /* 7. LOGGING */
+    double X_calc_MGD = rtController.position_ref[1]; 
+    
+    FILE *fptr;
+    fptr = fopen("mesures.txt","a");
+    if (fptr != NULL) {
+        fprintf(fptr, "%f %f %f %f %f %f\n", temps, Kp_Actuel, Consigne, q1_mes, X_mes, X_calc_MGD);
+        fclose(fptr);
+    }
+    
+    if (temps > 20.0) {
+        rtController.bIsTrackingEnd = 1;
+        rtController.control[0] = 0.0;
+    }
 
     return NO_ERROR;
 }
-
-
 /********** A FAIRE 3 (FIN)*************************************/
 /***************************************************************/
 
@@ -409,10 +621,6 @@ void rtController_main_sequencer(void)
         break;
     }
 }
-
-
-
-
 
 ///
 /// \fn rtController_config_ethercat
@@ -484,10 +692,10 @@ int  rtController_config_ethercat(void)
       return 1;
   }
 
-  /* convertisseur du module CNA EL4134*/
+  /* convertisseur du module CNA EL4132*/
   AnalogOut[0].sc = ecrt_master_slave_config(master,
                                                           AnaOutSlavePos,
-                                                          BECKHOFF_EL4134);
+                                                          BECKHOFF_EL4132);
   if (!AnalogOut[0].sc)
     return -1;
   if (ecrt_slave_config_pdos(AnalogOut[0].sc, EC_END, slave_2_syncs))
@@ -575,6 +783,7 @@ void rtController_Main_Proc(void *arg)
     rtController.bIsRunning = 1;
     sleep(1);
     printf("Démarrage tâche pếriodique avec une période de 10 ms ...\n");
+
     /***************************************************************/
     /********** A FAIRE 2 bis (DEBUT)*************************************/
     /****  Périodiser la tâche avec un décalage d'exécution de 10 ms par exemple
@@ -585,9 +794,73 @@ void rtController_Main_Proc(void *arg)
 		- si master_state.al_states == EC_MASTER_OP
 			alors utiliser le graphe d'état du main_sequencer (rtController_main_sequencer())
 	utilisez au maximum les variables déjà définies
+
  */
+
+    /*On est dans la fonction rtController_Main_Proc */
+    printf("\n start_time is : \n"); 
+    printf ("%d",start_ns,"\n");
+
+    rtController.start_time = rt_timer_read();
+    start_ns = rtController.start_time + 10000000;
+    printf("\n start_time is : \n");
+    printf ("%d",start_ns,"\n");
+
+    /* rtController.current_time = rtController.start_time; */
+    rt_task_set_periodic (NULL, start_ns, main_task_period_ns); /*bascule la tache courante en tache periodique de peiode spécifiée*/
+    i=0;
+
+    int cycle_counter = 0; // Compteur pour gérer l'affichage
+
+    while(rtController.bIsRunning) 
+    {
+        /* 1. Attente du top horloge (Cadencement 10ms) */
+        rt_task_wait_period(NULL);
+        
+        /* 2. Lecture / Ecriture sur le Bus EtherCAT */
+        rtController_DeviceUpdate();
+
+        /* 3. Mise à jour du temps */
+        rtController.current_time = rt_timer_read();
+        
+        /* 4. Gestion de la machine d'état (Si le bus est OK) */
+        rt_check_master_state(); // Met à jour master_state
+        
+        if (master_state.al_states == 0x08) { // 0x08 = OP (Opérationnel)
+            rtController_main_sequencer();
+        }
+
+        /* 5. TABLEAU DE BORD (Affichage Terminal propre) */
+        /* On affiche seulement tous les 50 cycles (50 * 10ms = 0.5 sec) */
+        cycle_counter++;
+        if (cycle_counter % 50 == 0) 
+        {
+            // On efface l'écran ou on saute des lignes pour la lisibilité
+            // Affichage de l'état
+            double t_s = (double)rtController.current_time / 1e9;
+            printf("--------------------------------------------------\n");
+            printf("Temps: %.2f s | Mode: %d \n", t_s, rtController.mode);
+            
+            if (rtController.mode == POSITION_TRACKING_MODE) {
+                // Affichage des données clés en temps réel
+                printf("TRACKING EN COURS :\n");
+                printf(" > Consigne Angle : %.3f rad\n", rtController.position_ref[0]);
+                printf(" > Mesure  Angle : %.3f rad\n", rtController.measure[0]);
+                printf(" > Erreur        : %.3f rad\n", rtController.position_ref[0] - rtController.measure[0]);
+            } else {
+                printf("Etat Master: 0x%02X (Attente tracking...)\n", master_state.al_states);
+            }
+            printf("--------------------------------------------------\n");
+        }
+    }
     /********** A FAIRE 2 bis (FIN)*************************************/
     /***************************************************************/ 
+
+
+
+
+
+
    
    
     printf("Fin de la tâche principale.\n");
@@ -629,14 +902,38 @@ int main(void)
     }
     iopl(3);
 
-    
-    /***************************************************************/
+
+
+/***************************************************************/
     /********** A FAIRE 2 (DEBUT)*************************************/
     /****  Créer la tache temps reel ayant pour identifiant rtController_Main_Task;
             avec pour nom "RTCONTROLLER_MAIN_TASK" avec les paramètres
             définis au début du programme pour la stack; priorité et mode
             Lancer l'exécution de la tâche en lui associant la fonction
             rtController_Main_Proc*/
+
+    ret = rt_task_create(
+	&rtController_Main_Task, /*Adresse du descripteur de la tache ?*/
+	"RTCONTROLLER_MAIN_TASK", /*nom de la tache*/
+	RTCONTROLLER_MAIN_TASK_STKSZ, /*Taille allouee à la pile de la tache*/
+	RTCONTROLLER_MAIN_TASK_PRIO, /*priorite de base de de la tache*/
+	RTCONTROLLER_MAIN_TASK_MODE /*mode de base associé à la tache*/
+	);
+
+    if(ret)
+	perror("Impossible de démarrer la tâche ");
+
+    ret = rt_task_start( /*demarrage de la tache*/
+	&rtController_Main_Task, /*Adresse du descripteur de la tache ?*/
+	&rtController_Main_Proc, /*pointeur sur la fonction*/
+	NULL /*arguments de la fonction*/
+	); 
+
+    if(ret){
+	perror("Démarrage de la tâche "); 
+	rt_task_delete(&rtController_Main_Task); /*destruction de la tache*/
+	exit(1);
+    }
 
     /********** A FAIRE 2 (FIN)*************************************/
     /***************************************************************/
